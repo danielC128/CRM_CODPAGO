@@ -152,7 +152,7 @@ import prisma from "@/lib/prisma";
 //     });
 //   }
 // }
-//CON TEMPORAL
+// ✅ CON CLIENTE_CAMPANHA (Tabla permanente)
 export async function GET(req, context) {
   try {
     const params = await context.params;
@@ -163,30 +163,51 @@ export async function GET(req, context) {
         headers: { "Content-Type": "application/json" },
       });
     }
-    
+
     const { searchParams } = new URL(req.url);
     const page = parseInt(searchParams.get("page") || "1", 10);
     const pageSize = parseInt(searchParams.get("pageSize") || "10", 10);
+
     // Obtener la campaña con detalles
     const campanha = await prisma.campanha.findUnique({
       where: { campanha_id: Number(params.id) },
       include: {
-        template: { select: { nombre_template: true, mensaje: true } }, // Template
+        template: { select: { nombre_template: true, mensaje: true } },
       },
     });
-    // Contar el total de clientes cargados para la campaña en la tabla temporal
-    const totalClientes = await prisma.campanha_temporal.count({
+
+    if (!campanha) {
+      return new Response(JSON.stringify({ error: "Campaña no encontrada" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Contar el total de clientes asociados a la campaña
+    const totalClientes = await prisma.cliente_campanha.count({
       where: { campanha_id: campanhaId },
     });
-    
-    // Consultar los registros de la tabla temporal
-    const clientes = await prisma.campanha_temporal.findMany({
+
+    // Consultar los registros de cliente_campanha con los datos del cliente
+    const clientesCampanha = await prisma.cliente_campanha.findMany({
       where: { campanha_id: campanhaId },
+      include: {
+        cliente: {
+          select: {
+            cliente_id: true,
+            nombre: true,
+            apellido: true,
+            celular: true,
+            email: true,
+            documento_identidad: true,
+          }
+        }
+      },
       skip: (page - 1) * pageSize,
       take: pageSize,
-      orderBy: { id: "asc" },
+      orderBy: { cliente_campanha_id: "asc" },
     });
-    
+
     const response = {
       campanha_id: campanhaId,
       num_clientes: totalClientes,
@@ -202,10 +223,16 @@ export async function GET(req, context) {
             mensaje: campanha.template.mensaje,
           }
         : { nombre_template: "No asignado", mensaje: "No definido" },
-      clientes: clientes.map((c) => ({
-        id: c.id,
-        nombre: c.nombre,
-        celular: c.celular,
+      clientes: clientesCampanha.map((cc) => ({
+        id: cc.cliente.cliente_id,
+        nombre: cc.cliente.nombre,
+        apellido: cc.cliente.apellido,
+        celular: cc.cliente.celular,
+        email: cc.cliente.email,
+        documento_identidad: cc.cliente.documento_identidad,
+        estado_mensaje: cc.estado_mensaje,
+        fecha_envio: cc.fecha_envio,
+        whatsapp_message_id: cc.whatsapp_message_id,
       })),
       pagination: {
         total: totalClientes,
@@ -214,13 +241,13 @@ export async function GET(req, context) {
         totalPages: Math.ceil(totalClientes / pageSize),
       },
     };
-    
+
     return new Response(JSON.stringify(response), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("❌ Error al obtener clientes de campaña temporal:", error);
+    console.error("❌ Error al obtener clientes de campaña:", error);
     return new Response(JSON.stringify({ error: "Error interno del servidor" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },

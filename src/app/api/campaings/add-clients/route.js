@@ -49,8 +49,8 @@ export async function POST(req) {
 
     console.log(`✅ Campaña creada con ID: ${campanha.campanha_id}`);
 
-    // 2. Preparar datos para guardar en campanha_temporal
-    const dataToInsert = clients
+    // 2. Normalizar y preparar datos de clientes
+    const clientesNormalizados = clients
       .map((cliente) => {
         // Normalizar el número de teléfono
         let celular = cliente.celular || cliente.telefono || "";
@@ -66,33 +66,77 @@ export async function POST(req) {
         }
 
         return {
-          campanha_id: campanha.campanha_id,
-          celular: celular || null,
+          ...cliente,
+          celular_normalizado: celular,
           nombre: cliente.nombre || cliente.Nombre || null,
         };
       })
-      .filter((c) => c.celular); // ✅ Solo guardar clientes con celular válido
+      .filter((c) => c.celular_normalizado); // ✅ Solo clientes con celular válido
 
-    console.log(`📞 Clientes válidos con celular: ${dataToInsert.length}`);
+    console.log(`📞 Clientes válidos con celular: ${clientesNormalizados.length}`);
 
-    // 3. Guardar clientes en campanha_temporal
-    let result = { count: 0 };
+    // 3. Crear/buscar clientes en tabla `cliente` y asociarlos en `cliente_campanha`
+    let clientesCreados = 0;
+    let clientesExistentes = 0;
+    let asociacionesCreadas = 0;
 
-    if (dataToInsert.length > 0) {
-      result = await prisma.campanha_temporal.createMany({
-        data: dataToInsert,
-        skipDuplicates: true,
-      });
+    for (const clienteData of clientesNormalizados) {
+      try {
+        // 3.1 Buscar si el cliente ya existe por celular
+        let clienteDB = await prisma.cliente.findFirst({
+          where: { celular: clienteData.celular_normalizado },
+        });
 
-      console.log(`✅ ${result.count} clientes guardados en campanha_temporal`);
+        if (!clienteDB) {
+          // 3.2 Si no existe, crear nuevo cliente
+          clienteDB = await prisma.cliente.create({
+            data: {
+              nombre: clienteData.nombre || "Sin nombre",
+              apellido: "", // Campo requerido, vacío por defecto
+              celular: clienteData.celular_normalizado,
+              email: null,
+              documento_identidad: clienteData.dni || null,
+              estado: "activo",
+            },
+          });
+          clientesCreados++;
+          console.log(`✅ Cliente creado: ${clienteDB.celular}`);
+        } else {
+          clientesExistentes++;
+          console.log(`ℹ️ Cliente existente: ${clienteDB.celular}`);
+        }
+
+        // 3.3 Crear asociación en cliente_campanha
+        await prisma.cliente_campanha.create({
+          data: {
+            cliente_id: clienteDB.cliente_id,
+            campanha_id: campanha.campanha_id,
+            estado_mensaje: null, // Pendiente de envío
+            fecha_asociacion: new Date(),
+          },
+        });
+        asociacionesCreadas++;
+
+      } catch (error) {
+        console.error(`❌ Error procesando cliente ${clienteData.celular_normalizado}:`, error);
+        // Continuar con el siguiente cliente
+      }
     }
+
+    console.log(`✅ Clientes creados: ${clientesCreados}`);
+    console.log(`ℹ️ Clientes existentes: ${clientesExistentes}`);
+    console.log(`✅ Asociaciones creadas en cliente_campanha: ${asociacionesCreadas}`);
 
     // 4. Retornar respuesta exitosa
     return NextResponse.json({
       success: true,
       message: "Campaña creada y clientes asociados exitosamente",
       campanha_id: campanha.campanha_id,
-      clientes_guardados: result.count,
+      estadisticas: {
+        clientes_nuevos: clientesCreados,
+        clientes_existentes: clientesExistentes,
+        asociaciones_creadas: asociacionesCreadas,
+      },
       campanha: {
         campanha_id: campanha.campanha_id,
         nombre_campanha: campanha.nombre_campanha,

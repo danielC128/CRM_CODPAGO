@@ -737,10 +737,18 @@ export async function POST(req, context) {
       return NextResponse.json({ error: "ID de campaña no válido" }, { status: 400 });
     }
 
-    // 1) Obtener la campaña con su template
+    // 1) Obtener la campaña con su template y clientes
     const campaign = await prisma.campanha.findUnique({
       where: { campanha_id: campanhaId },
-      include: { template: true },
+      include: {
+        template: true,
+        cliente_campanha: {
+          include: { cliente: true },
+          where: {
+            estado_mensaje: null  // Solo los NO enviados
+          }
+        }
+      },
     });
     if (!campaign) {
       return NextResponse.json({ error: "Campaña no encontrada" }, { status: 404 });
@@ -749,16 +757,21 @@ export async function POST(req, context) {
       return NextResponse.json({ error: "La campaña no tiene un template válido" }, { status: 400 });
     }
 
-    // 2) Obtener clientes desde tabla temporal
-    const clientes = await prisma.campanha_temporal.findMany({
-      where: { campanha_id: campanhaId },
-    });
-    if (!clientes || clientes.length === 0) {
-      return NextResponse.json({ error: "No hay clientes cargados para esta campaña" }, { status: 400 });
+    // 2) Obtener clientes desde cliente_campanha
+    if (!campaign.cliente_campanha || campaign.cliente_campanha.length === 0) {
+      return NextResponse.json({ error: "No hay clientes pendientes de envío para esta campaña" }, { status: 400 });
     }
 
     // 3) Filtrar solo clientes con número válido
-    const clientesConNumero = clientes.filter(c => c.celular && c.celular.trim() !== "");
+    const clientesConNumero = campaign.cliente_campanha
+      .filter(cc => cc.cliente && cc.cliente.celular && cc.cliente.celular.trim() !== "")
+      .map(cc => ({
+        cliente_campanha_id: cc.cliente_campanha_id,
+        cliente_id: cc.cliente.cliente_id,
+        celular: cc.cliente.celular,
+        nombre: cc.cliente.nombre,
+      }));
+
     if (clientesConNumero.length === 0) {
       return NextResponse.json({ error: "No hay clientes con número válido para enviar" }, { status: 400 });
     }
@@ -785,33 +798,35 @@ export async function POST(req, context) {
           const message = await sendWithRetry(payload);
           console.log(`Mensaje enviado a ${clientItem.celular}: ${message.sid}`);
 
-          // 6) Guardar estado en Prisma y Firestore
-          await prisma.campanha_temporal.update({
-            where: { celular: clientItem.celular, campanha_id: campanhaId },
+          // 6) Actualizar estado en cliente_campanha y guardar en Firestore
+          await prisma.cliente_campanha.update({
+            where: { cliente_campanha_id: clientItem.cliente_campanha_id },
             data: {
-              twilio_sid: message.sid,
-              estado_envio: message.status,
-              error_codigo: null,
-              error_mensaje: null,
+              whatsapp_message_id: message.sid,
+              estado_mensaje: message.status,
+              fecha_envio: new Date(),
+              fecha_ultimo_estado: new Date(),
             },
           });
           await db.collection("test").add({
             celular: clientItem.celular,
             fecha: new Date(),
             id_bot: "codigopago",
-            id_cliente: null,
+            id_cliente: clientItem.cliente_id,
             mensaje: campaign.template.mensaje,
             sender: false,
           });
 
           return { to: clientItem.celular, status: "sent", sid: message.sid };
         } catch (error) {
-          await prisma.campanha_temporal.update({
-            where: { celular: clientItem.celular, campanha_id: campanhaId },
+          await prisma.cliente_campanha.update({
+            where: { cliente_campanha_id: clientItem.cliente_campanha_id },
             data: {
-              estado_envio: "failed",
-              error_codigo: error.code?.toString(),
-              error_mensaje: error.message,
+              estado_mensaje: "failed",
+              fecha_envio: new Date(),
+              fecha_ultimo_estado: new Date(),
+              error_code: error.code?.toString(),
+              error_descripcion: error.message,
             },
           });
           console.error(`Error al enviar mensaje a ${clientItem.celular}:`, error);

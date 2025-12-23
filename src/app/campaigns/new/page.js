@@ -111,9 +111,9 @@ export default function CampaignPage() {
       width: 90,
       type: 'number'
     },
-    { 
-      field: "codigos_pago", 
-      headerName: "Códigos de Pago", 
+    {
+      field: "code_pago",
+      headerName: "Códigos de Pago",
       width: 200,
       renderCell: (params) => {
         if (params.value && params.value.trim() !== '') {
@@ -121,7 +121,7 @@ export default function CampaignPage() {
           return (
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', py: 0.5 }}>
               {codigos.map((codigo, idx) => (
-                <Chip 
+                <Chip
                   key={idx}
                   label={codigo}
                   color="info"
