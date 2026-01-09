@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { parse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 import { MongoClient } from "mongodb";
 require("dotenv").config();
 
-const uri = process.env.DATABASE_URL_MONGODB;
-const clientPromise = new MongoClient(uri).connect();
+const uri = process.env.DATABASE_URL_MONGODB || "";
+const clientPromise = uri ? new MongoClient(uri).connect() : null;
 
 export async function POST(req, context) {
     try {
@@ -56,12 +55,25 @@ export async function POST(req, context) {
       }
   
       console.log("📌 Clientes cargados desde archivo:", clientes);
-  
+
       const clientesProcesados = [];
+
+      // Validar conexión a MongoDB
+      if (!clientPromise) {
+        console.error("❌ Error: DATABASE_URL_MONGODB no está configurada");
+        return NextResponse.json({ error: "Error de configuración del servidor" }, { status: 500 });
+      }
+
       const mongoClient = await clientPromise;
-      const db = mongoClient.db(process.env.MONGODB_DB);
+      const dbName = process.env.MONGODB_DB;
+      if (!dbName) {
+        console.error("❌ Error: MONGODB_DB no está configurada");
+        return NextResponse.json({ error: "Error de configuración del servidor" }, { status: 500 });
+      }
+
+      const db = mongoClient.db(dbName);
       const existingClientesMongo = await db.collection("clientes").find({
-        celular: { $in: clientes.map(cliente => `+51${String(cliente.Numero).trim()}`) }
+        celular: { $in: clientes.map(cliente => `+51${String(cliente.Numero || "").trim()}`).filter(n => n !== "+51") }
       }).toArray();
   
       const clienteCeld = existingClientesMongo.map(cliente => cliente.celular);  // Lista de clientes ya existentes en MongoDB.
@@ -72,8 +84,14 @@ export async function POST(req, context) {
           console.warn("❗ Cliente omitido por datos faltantes:", cliente);
           return;
         }
-  
-        Numero = String(Numero).trim();
+
+        // Asegurar que Numero es un string válido
+        Numero = String(Numero || "").trim();
+        if (!Numero) {
+          console.warn("❗ Cliente omitido: número vacío después de procesar");
+          return;
+        }
+
         if (!Numero.startsWith("+51")) {
           Numero = `+51${Numero}`;
         }
